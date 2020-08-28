@@ -1,202 +1,128 @@
-#include <ESP32Servo.h>
+#include <Wire.h>                //Biblioteca para I2C
 
-// Variáveis
-Servo servo_Mangueira;   // Objeto do servo que controla a mangueira
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
-bool flag_comando_inicio = 0;  // Indica que o comando Bluetooth foi recebido e agora está no meio do processo.
-bool flag_cancelar_processo = 0; // Indica que o processo deve ser cancelado e voltar para espera de um novo comando.
-bool flag_comando_reinicio = 0;  // Indica que o processo estava travado sem copo na bandeja, e foi recebido o comando pelo bluetooth para iniciar.
+BLECharacteristic *characteristicTX; //através desse objeto iremos enviar dados para o client
 
-int angulo_fim_mangueira;     //posição do servo mangueira apontado para o copo em graus
-int angulo_inicio_mangueira;   //posição do servo mangueira inicial em graus
+bool deviceConnected = false; //controle de dispositivo conectado
 
-unsigned long tempo_Bombeado;
+const int LED = 2; //LED interno do ESP32 (esse pino pode variar de placa para placa) // Could be different depending on the dev board. I used the DOIT ESP32 dev board.
+const int BUZZER = 23; //pino d BUZZER
 
-// PINS
-int pin_Sensor_copo_repositorio = 1;  //(INSERIR PINO de conexão com o sensor de infravermelho do repositorio);
-int pin_Sensor_copo_bandeja = 1;  //(INSERIR PINO de conexão com o sensor de infravermelho da bandeja);
-int pin_Servo_mangueira = 1;    //(INSERIR PINO de conexão com o servo mangueira);
-int pin_Motor_copo = 1;    //(INSERIR PINO de conexão com o drive do motor que solta um copo);
-int pin_Motor_copo_gnd = 12;    //(INSERIR PINO de conexão com o drive do motor que solta um copo gnd);
-int pin_Motor_liquido = 14;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido);
-int pin_Motor_liquido_gnd = 15;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido gnd);
+// See the following for generating UUIDs:
+// https://www.uuidgenerator.net/
 
-// SETUP
-void setup() {
+#define SERVICE_UUID           "ab0828b1-198e-4351-b779-901fa0e0371e" // UART service UUID
+#define CHARACTERISTIC_UUID_RX "4ac8a682-9736-4e5d-932b-e9b31405049c"
+#define CHARACTERISTIC_UUID_TX "0972EF8C-7613-4075-AD52-756F33D4DA91"
 
-  Serial.begin(115200);
-    
-  ESP32PWM::allocateTimer(0);
-  ESP32PWM::allocateTimer(1);
-  ESP32PWM::allocateTimer(2);
-  ESP32PWM::allocateTimer(3);
-  servo_Mangueira.setPeriodHertz(50);
-  servo_Mangueira.attach(pin_Servo_mangueira, 500, 2400);
+//callback para receber os eventos de conexão de dispositivos
+class ServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+      deviceConnected = true;
+    };
 
-  digitalWrite(pin_Motor_liquido_gnd, LOW);
-  digitalWrite(pin_Motor_copo_gnd, LOW);
-  digitalWrite(pin_Motor_liquido_gnd, LOW);
+    void onDisconnect(BLEServer* pServer) {
+      deviceConnected = false;
+    }
+};
 
-  pinMode(13,INPUT);
-  pinMode(34,INPUT);
-  pinMode(35,INPUT);
-}
+//callback  para envendos das características
+class CharacteristicCallbacks: public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *characteristic) {
+      //retorna ponteiro para o registrador contendo o valor atual da caracteristica
+      std::string rxValue = characteristic->getValue(); 
+      //verifica se existe dados (tamanho maior que zero)
+      if (rxValue.length() > 0) {
+        Serial.println("*********");
+        Serial.print("Received Value: ");
 
+        for (int i = 0; i < rxValue.length(); i++) {
+          Serial.print(rxValue[i]);
+        }
 
-// LOOP
-void loop() {
-   
-   flag_comando_inicio = digitalRead(13);
-   if(flag_comando_inicio == 1){
-      
-      if(Verifica_copos_repositorio() == 0){
-          Serial.println("Sem COpos");
-          flag_comando_inicio = 0;
+        Serial.println();
+
+        // Do stuff based on the command received
+        if (rxValue.find("L1") != -1) { 
+          Serial.print("Turning LED ON!");
+          digitalWrite(LED, HIGH);
+        }
+        else if (rxValue.find("L0") != -1) {
+          Serial.print("Turning LED OFF!");
+          digitalWrite(LED, LOW);
+        }
+        // Do stuff based on the command received from the app
+        else if (rxValue.find("B1") != -1) { 
+          Serial.print("Turning Buzzer ON!");
+          digitalWrite(BUZZER, HIGH);
+        }
+        else if (rxValue.find("B0") != -1) {
+          Serial.print("Turning Buzzer OFF!");
+          digitalWrite(BUZZER, LOW);
+        }
+
+        Serial.println();
+        Serial.println("*********");
       }
+    }
+};
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(LED, OUTPUT);
+  pinMode(BUZZER, OUTPUT);
+
+  // Create the BLE Device
+  BLEDevice::init("ESP32-BLE"); // nome do dispositivo bluetooth
+  // Create the BLE Server
+  BLEServer *server = BLEDevice::createServer(); //cria um BLE server 
+  server->setCallbacks(new ServerCallbacks()); //seta o callback do server
+  // Create the BLE Service
+  BLEService *service = server->createService(SERVICE_UUID);
+  // Create a BLE Characteristic para envio de dados
+  characteristicTX = service->createCharacteristic(
+                      CHARACTERISTIC_UUID_TX,
+                      BLECharacteristic::PROPERTY_NOTIFY
+                    );
+                      
+  characteristicTX->addDescriptor(new BLE2902());
+
+  // Create a BLE Characteristic para recebimento de dados
+  BLECharacteristic *characteristic = service->createCharacteristic(
+                                         CHARACTERISTIC_UUID_RX,
+                                         BLECharacteristic::PROPERTY_WRITE
+                                       );
+
+  characteristic->setCallbacks(new CharacteristicCallbacks());
+  // Start the service
+  service->start();
+  // Start advertising (descoberta do ESP32)
+  server->getAdvertising()->start();
+
+  Serial.println("Waiting a client connection to notify...");
+
+}
+
+void loop() {
+     //se existe algum dispositivo conectado
+    if (deviceConnected) {
+      //chamamos o método "read" do sensor para realizar a leitura da temperatura
+      //read retornará 1 caso consiga realizar a leitura, ou 0 caso contrário 
       
-      else{
-          Liberar_copo_bandeja();
-          
-          if(flag_cancelar_processo == 1){
-              Serial.println("Informar que houve problemas de liberação e copos");
-              flag_comando_inicio = 0;
-              flag_cancelar_processo = 0;
-          }
-          
-          else{
-              Posicionar_mangueira_fim();
-              if(Verifica_copos_bandeja() != 1){
-                
-                  Posicionar_mangueira_inicio();
-
-                  Aguardar_copo_ou_reinicio();
-                  
-              }
-
-              if(flag_cancelar_processo == 1){
-                  Serial.println("Copo sumiu da bandeja");
-                  flag_comando_inicio = 0;
-                  flag_cancelar_processo = 0;
-              }
-              else if(flag_comando_reinicio == 1){
-                  Serial.println("Começar com novo copo");
-                  flag_comando_inicio = 1;
-                  flag_comando_reinicio = 0;
-              }
-              else {
-                  Bombear_liquido();
-              }                  
-          }
-      }      
-   }
-
-   
-}
-
-// FUNÇÔES 
-
-bool Verifica_copos_repositorio(){
-  
-    Serial.println("Copo verificado no repositorio");
-    //return ~digitalRead(pin_Sensor_copo_repositorio);
-    return digitalRead(34);   
-}
-
-bool Verifica_copos_bandeja(){
-  
-    Serial.println("Copo verificado na bandeja");
-    //return ~digitalRead(pin_Sensor_copo_bandeja);
-    return digitalRead(35);   
-}
-
-void Liberar_copo_bandeja(){
-  
-    Serial.println("Acionar Motor DC para liberar um copo");
-    //digitalWrite(pin_Motor_copo, HIGH);
-    //delay(tempo_Motor_ligado_copo);
-    //digitalWrite(pin_Motor_copo, LOW);
-    delay(10000);
-    unsigned long tempoInicio = millis();
-    
-    while(Verifica_copos_bandeja() !=1){
-        if( millis() - tempoInicio >= 2000){
-            flag_cancelar_processo = 1;
-            break;
-        }
-    }
-}
-
-void Posicionar_mangueira_fim(){
-
-    Serial.println("Posicionando Mangueira");
-    //servo_Mangueira.write(angulo_fim_mangueira);
-    delay(10000);
-    Serial.println("Mangueira posicionada fim");
-}
-
-void Posicionar_mangueira_inicio(){
-
-    Serial.println("Posicionando Mangueira");
-    //servo_Mangueira.write(angulo_inicio_mangueira);
-    delay(10000);
-    Serial.println("Mangueira posicionada inicio");
-}
+  /*
+    delay(1000);
 
 
-void Aguardar_copo_ou_reinicio(){
-    Serial.println("Aguardando copo");
-    unsigned long tempoInicio = millis();
-    
-    while(Verifica_copos_bandeja() != 1){
-        if( (millis() - tempoInicio) >= 30000){   //Lembrar de colocar a cast
-            flag_cancelar_processo = 1;
-            break;
-        }
-        else{
-            if( flag_comando_reinicio == 1)  // Lembrar de codificar essa parte na interrupção
-                break;
-        }
-    }
-}
 
+    characteristicTX2->setValue("Hello!"); // Sending a test message
+    characteristicTX2->notify(); // Send the value to the app!*/
 
-void Bombear_liquido(){
-    Serial.println("Bombeando liquido");
-    unsigned long tempoInicio = millis();
-    bool continuar = 1;
-    while( continuar == 1 ){
-      
-        if( Verifica_copos_bandeja() != 1){
-            continuar = 0;
-            Posicionar_mangueira_inicio();
-            Aguardar_copo_ou_reinicio();
-            
-            if(flag_cancelar_processo == 1){
-              flag_cancelar_processo = 0;
-              flag_comando_inicio = 0;
-              break;
-            }
-            else if(flag_comando_reinicio == 1){
-              flag_comando_inicio = 1;
-              flag_comando_reinicio = 0;
-              break;
-            }
-            else{
-              continuar = 1;
-            }
-            
-        }
-        tempo_Bombeado = tempo_Bombeado + (millis() - tempoInicio);
-        
-        if( tempo_Bombeado > 10000){
-           continuar = 0;
-           tempo_Bombeado = 0;
-           
-        }
+  }
+  delay(1000);
 
-        //digitalWrite(pin_Motor_liquido, HIGH);
-        
-    }
-    //digitalWrite(pin_Motor_liquido, LOW);
-    Serial.println("Bombeamento Finalizado");
 }
