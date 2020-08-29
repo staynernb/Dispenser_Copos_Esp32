@@ -1,5 +1,4 @@
 #include <Wire.h>                //Biblioteca para I2C
-
 #include <ESP32Servo.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -11,6 +10,12 @@
 #define CHARACTERISTIC_UUID_RX "4ac8a682-9736-4e5d-932b-e9b31405049c"
 #define CHARACTERISTIC_UUID_TX "0972EF8C-7613-4075-AD52-756F33D4DA91"
 
+// Parâmetros ajustáveis 
+#define TEMPO_POSICIONAR_MANGUEIRA 2000
+#define TEMPO_BOMBEAMENTO 10000
+#define TEMPO_ESPERAR_COPO 5000
+#define TEMPO_LIBERAR_COPO 1000
+
 // Variáveis
 Servo servo_Mangueira;   // Objeto do servo que controla a mangueira
 BLECharacteristic *characteristicTX; // Objeto que permite enviar dados para o cliente Bluetooth
@@ -20,17 +25,17 @@ bool flag_comando_inicio = 0;  // Indica que o comando Bluetooth foi recebido e 
 bool flag_cancelar_processo = 0; // Indica que o processo deve ser cancelado e voltar para espera de um novo comando.
 bool flag_comando_reinicio = 0;  // Indica que o processo estava travado sem copo na bandeja, e foi recebido o comando pelo bluetooth para iniciar.
 
-int angulo_fim_mangueira;     //posição do servo mangueira apontado para o copo em graus
-int angulo_inicio_mangueira;   //posição do servo mangueira inicial em graus
+int angulo_fim_mangueira = 90;     //posição do servo mangueira apontado para o copo em graus
+int angulo_inicio_mangueira = 0;   //posição do servo mangueira inicial em graus
 
-unsigned long tempo_Bombeado;
+unsigned long tempo_Bombeado = 0;
 
 // PINS
 int pin_Sensor_copo_repositorio = 1;  //(INSERIR PINO de conexão com o sensor de infravermelho do repositorio);
-int pin_Sensor_copo_bandeja = 1;  //(INSERIR PINO de conexão com o sensor de infravermelho da bandeja);
-int pin_Servo_mangueira = 1;    //(INSERIR PINO de conexão com o servo mangueira);
+int pin_Sensor_copo_bandeja = 13;  //(INSERIR PINO de conexão com o sensor de infravermelho da bandeja);
+int pin_Servo_mangueira = 12;    //(INSERIR PINO de conexão com o servo mangueira);
 int pin_Motor_copo = 1;    //(INSERIR PINO de conexão com o drive do motor que solta um copo);
-int pin_Motor_copo_gnd = 12;    //(INSERIR PINO de conexão com o drive do motor que solta um copo gnd);
+int pin_Motor_copo_gnd = 16;    //(INSERIR PINO de conexão com o drive do motor que solta um copo gnd);
 int pin_Motor_liquido = 14;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido);
 int pin_Motor_liquido_gnd = 15;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido gnd);
 
@@ -57,7 +62,9 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
           Serial.print("Liberando copo");
           if (!flag_comando_inicio) {
             flag_comando_inicio = 1;
+            Serial.println("flag comando = 1");
           } else {
+            Serial.println("flag comando reinicio = 1");
             flag_comando_reinicio = 1;
           }
         }
@@ -119,7 +126,7 @@ void setup() {
 
 // LOOP
 void loop() {
-   flag_comando_inicio = digitalRead(13);
+
    if (flag_comando_inicio == 1){
       if (Verifica_copos_repositorio() == 0){
           Serial.println("Sem COpos");
@@ -150,11 +157,16 @@ void loop() {
                   flag_comando_reinicio = 0;
               }
               else {
+                  Posicionar_mangueira_fim();
                   Bombear_liquido();
+                  Posicionar_mangueira_inicio();
+                  Serial.println("flag comando no final : ");
+                  Serial.print(flag_comando_inicio);
               }
           }
       }
-   }   
+   }  
+    
 }
 
 // FUNÇÔES 
@@ -163,14 +175,15 @@ bool Verifica_copos_repositorio(){
   
     Serial.println("Copo verificado no repositorio");
     //return ~digitalRead(pin_Sensor_copo_repositorio);
-    return digitalRead(34);   
+    return 1;   
 }
 
 bool Verifica_copos_bandeja(){
-  
-    Serial.println("Copo verificado na bandeja");
-    //return ~digitalRead(pin_Sensor_copo_bandeja);
-    return digitalRead(35);   
+    bool aux;
+    Serial.println("Copo verificado na bandeja: ");
+    aux =  !digitalRead(pin_Sensor_copo_bandeja);
+    Serial.print(aux);
+    return aux;
 }
 
 void Liberar_copo_bandeja(){
@@ -179,11 +192,11 @@ void Liberar_copo_bandeja(){
     //digitalWrite(pin_Motor_copo, HIGH);
     //delay(tempo_Motor_ligado_copo);
     //digitalWrite(pin_Motor_copo, LOW);
-    delay(10000);
+    delay(TEMPO_LIBERAR_COPO);
     unsigned long tempoInicio = millis();
     
     while(Verifica_copos_bandeja() !=1){
-        if( millis() - tempoInicio >= 2000){
+        if( millis() - tempoInicio >= TEMPO_ESPERAR_COPO){
             flag_cancelar_processo = 1;
             break;
         }
@@ -193,16 +206,16 @@ void Liberar_copo_bandeja(){
 void Posicionar_mangueira_fim(){
 
     Serial.println("Posicionando Mangueira");
-    //servo_Mangueira.write(angulo_fim_mangueira);
-    delay(10000);
+    servo_Mangueira.write(angulo_fim_mangueira);
+    delay(TEMPO_POSICIONAR_MANGUEIRA);
     Serial.println("Mangueira posicionada fim");
 }
 
 void Posicionar_mangueira_inicio(){
 
     Serial.println("Posicionando Mangueira");
-    //servo_Mangueira.write(angulo_inicio_mangueira);
-    delay(10000);
+    servo_Mangueira.write(angulo_inicio_mangueira);
+    delay(TEMPO_POSICIONAR_MANGUEIRA);
     Serial.println("Mangueira posicionada inicio");
 }
 
@@ -212,12 +225,12 @@ void Aguardar_copo_ou_reinicio(){
     unsigned long tempoInicio = millis();
     
     while(Verifica_copos_bandeja() != 1){
-        if( (millis() - tempoInicio) >= 30000){   //Lembrar de colocar a cast
+        if( (millis() - tempoInicio) >= TEMPO_ESPERAR_COPO){   //Lembrar de colocar a cast
             flag_cancelar_processo = 1;
             break;
         }
         else{
-            if( flag_comando_reinicio == 1)  // Lembrar de codificar essa parte na interrupção
+            if( flag_comando_reinicio == 1)  
                 break;
         }
     }
@@ -226,13 +239,17 @@ void Aguardar_copo_ou_reinicio(){
 
 void Bombear_liquido(){
     Serial.println("Bombeando liquido");
-    unsigned long tempoInicio = millis();
+    unsigned long tempoAnterior = millis();
+    Serial.print("tempo Inicio: ");
+    Serial.println(tempoAnterior);
     bool continuar = 1;
     while( continuar == 1 ){
       
         if( Verifica_copos_bandeja() != 1){
             continuar = 0;
             Posicionar_mangueira_inicio();
+            Serial.println("Desligar motor");
+            //digitalWrite(pin_Motor_liquido, LOW);
             Aguardar_copo_ou_reinicio();
             
             if(flag_cancelar_processo == 1){
@@ -242,24 +259,35 @@ void Bombear_liquido(){
             }
             else if(flag_comando_reinicio == 1){
               flag_comando_inicio = 1;
-              flag_comando_reinicio = 0;
               break;
             }
             else{
+              Posicionar_mangueira_fim();
               continuar = 1;
             }
+            tempoAnterior = millis();
             
         }
-        tempo_Bombeado = tempo_Bombeado + (millis() - tempoInicio);
-        
-        if( tempo_Bombeado > 10000){
+        tempo_Bombeado = tempo_Bombeado + (millis() - tempoAnterior);
+        tempoAnterior = millis();
+        Serial.println(tempo_Bombeado);
+        if( tempo_Bombeado > TEMPO_BOMBEAMENTO){
            continuar = 0;
+           Serial.print("continuar : ");
+           Serial.println(continuar);
            tempo_Bombeado = 0;
            
         }
-
+        
         //digitalWrite(pin_Motor_liquido, HIGH);
         
+    }
+    if(flag_comando_reinicio==1){
+      flag_comando_reinicio = 0;
+      flag_comando_inicio = 1;
+    }
+    else{
+      flag_comando_inicio = 0;
     }
     //digitalWrite(pin_Motor_liquido, LOW);
     Serial.println("Bombeamento Finalizado");
