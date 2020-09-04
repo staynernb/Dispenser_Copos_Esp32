@@ -1,9 +1,14 @@
+// Envio to cel       
+//characteristicTX->setValue("UAU");
+//characteristicTX->notify();
+
 #include <Wire.h>                //Biblioteca para I2C
 #include <ESP32Servo.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include "BluetoothSerial.h"
 
 // Constantes
 #define SERVICE_UUID           "ab0828b1-198e-4351-b779-901fa0e0371e" // UART service UUID
@@ -19,6 +24,7 @@
 // Variáveis
 Servo servo_Mangueira;   // Objeto do servo que controla a mangueira
 BLECharacteristic *characteristicTX; // Objeto que permite enviar dados para o cliente Bluetooth
+BluetoothSerial SerialBT;
 
 bool flag_dispositivo_conectado = false; // Indica que um dispositivo bluetooth foi conectado
 bool flag_comando_inicio = 0;  // Indica que o comando Bluetooth foi recebido e agora está no meio do processo.
@@ -29,6 +35,13 @@ int angulo_fim_mangueira = 90;     //posição do servo mangueira apontado para 
 int angulo_inicio_mangueira = 0;   //posição do servo mangueira inicial em graus
 
 unsigned long tempo_Bombeado = 0;
+
+String ssids_array[50];
+String client_wifi_ssid;
+String client_wifi_password;
+
+enum wifi_setup_stages {NONE, SCAN_START, SCAN_COMPLETE, SSID_ENTERED, WAIT_PASS, PASS_ENTERED, WAIT_CONNECT, LOGIN_FAILED};
+enum wifi_setup_stages wifi_stage = NONE;
 
 // PINS
 int pin_Sensor_copo_repositorio = 1;  //(INSERIR PINO de conexão com o sensor de infravermelho do repositorio);
@@ -67,6 +80,20 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
             Serial.println("flag comando reinicio = 1");
             flag_comando_reinicio = 1;
           }
+        }
+        if (rxValue.find("config") != -1) { 
+           Serial.print("Configuração");
+           wifi_stage = SCAN_START;
+        }
+        if( wifi_stage == SCAN_COMPLETE) {
+          client_wifi_ssid = rxValue.data();
+          Serial.println(client_wifi_ssid);
+          wifi_stage = SSID_ENTERED;
+        }
+        if (wifi_stage == WAIT_PASS){
+          client_wifi_password = rxValue.data();
+          Serial.println(rxValue.data());
+          wifi_stage = PASS_ENTERED;
         }
       }
     }
@@ -126,47 +153,61 @@ void setup() {
 
 // LOOP
 void loop() {
-
-   if (flag_comando_inicio == 1){
-      if (Verifica_copos_repositorio() == 0){
-          Serial.println("Sem COpos");
-          flag_comando_inicio = 0;
-      } 
-      else {
-          Liberar_copo_bandeja();
-          if (flag_cancelar_processo == 1){
-              Serial.println("Informar que houve problemas de liberação e copos");
-              flag_comando_inicio = 0;
-              flag_cancelar_processo = 0;
-          }
-          else {
-              Posicionar_mangueira_fim();
-              if (Verifica_copos_bandeja() != 1){
-                  Posicionar_mangueira_inicio();
-                  Aguardar_copo_ou_reinicio();
-              }
-
-              if (flag_cancelar_processo == 1){
-                  Serial.println("Copo sumiu da bandeja");
-                  flag_comando_inicio = 0;
-                  flag_cancelar_processo = 0;
-              }
-              else if (flag_comando_reinicio == 1){
-                  Serial.println("Começar com novo copo");
-                  flag_comando_inicio = 1;
-                  flag_comando_reinicio = 0;
-              }
-              else {
-                  Posicionar_mangueira_fim();
-                  Bombear_liquido();
-                  Posicionar_mangueira_inicio();
-                  Serial.println("flag comando no final : ");
-                  Serial.print(flag_comando_inicio);
-              }
-          }
-      }
-   }  
+   if(flag_dispositivo_conectado){
+     if(wifi_stage == SCAN_START){
+          Serial.println("Escaneando wifis");
+          wifi_stage = SCAN_COMPLETE;
+          Serial.println("Digite sua id");
+     }
+     if(wifi_stage == SSID_ENTERED){
+          Serial.println("Digite sua senha");
+          wifi_stage = WAIT_PASS;
+     }
+     if(wifi_stage == PASS_ENTERED){
+          Serial.println("CONECTANDO");
+          wifi_stage = NONE;
+     }
     
+     if (flag_comando_inicio == 1){
+        if (Verifica_copos_repositorio() == 0){
+            Serial.println("Sem COpos");
+            flag_comando_inicio = 0;
+        } 
+        else {
+            Liberar_copo_bandeja();
+            if (flag_cancelar_processo == 1){
+                Serial.println("Informar que houve problemas de liberação e copos");
+                flag_comando_inicio = 0;
+                flag_cancelar_processo = 0;
+            }
+            else {
+                Posicionar_mangueira_fim();
+                if (Verifica_copos_bandeja() != 1){
+                    Posicionar_mangueira_inicio();
+                    Aguardar_copo_ou_reinicio();
+                }
+  
+                if (flag_cancelar_processo == 1){
+                    Serial.println("Copo sumiu da bandeja");
+                    flag_comando_inicio = 0;
+                    flag_cancelar_processo = 0;
+                }
+                else if (flag_comando_reinicio == 1){
+                    Serial.println("Começar com novo copo");
+                    flag_comando_inicio = 1;
+                    flag_comando_reinicio = 0;
+                }
+                else {
+                    Posicionar_mangueira_fim();
+                    Bombear_liquido();
+                    Posicionar_mangueira_inicio();
+                    Serial.println("flag comando no final : ");
+                    Serial.print(flag_comando_inicio);
+                }
+            }
+        }
+     }  
+   }
 }
 
 // FUNÇÔES 
