@@ -9,12 +9,15 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include "BluetoothSerial.h"
+#include <WiFi.h>
+#include <WiFiServer.h>
+#include "EEPROM.h"
 
 // Constantes
 #define SERVICE_UUID           "ab0828b1-198e-4351-b779-901fa0e0371e" // UART service UUID
 #define CHARACTERISTIC_UUID_RX "4ac8a682-9736-4e5d-932b-e9b31405049c"
 #define CHARACTERISTIC_UUID_TX "0972EF8C-7613-4075-AD52-756F33D4DA91"
-
+#define EEPROM_SIZE 128
 // Parâmetros ajustáveis 
 #define TEMPO_POSICIONAR_MANGUEIRA 2000
 #define TEMPO_BOMBEAMENTO 10000
@@ -25,6 +28,7 @@
 Servo servo_Mangueira;   // Objeto do servo que controla a mangueira
 BLECharacteristic *characteristicTX; // Objeto que permite enviar dados para o cliente Bluetooth
 BluetoothSerial SerialBT;
+WiFiServer web_server(80);    // Set web server port number to 80
 
 bool flag_dispositivo_conectado = false; // Indica que um dispositivo bluetooth foi conectado
 bool flag_comando_inicio = 0;  // Indica que o comando Bluetooth foi recebido e agora está no meio do processo.
@@ -36,21 +40,26 @@ int angulo_inicio_mangueira = 0;   //posição do servo mangueira inicial em gra
 
 unsigned long tempo_Bombeado = 0;
 
-String ssids_array[50];
+//String ssids_array[50];
 String client_wifi_ssid;
 String client_wifi_password;
+// Variable to store the HTTP request
+String header;
+
+const int ssid_Addr = 0;     // Endereços da memória rom para ssid e senha da wifi.
+const int pass_Addr = 30;
 
 enum wifi_setup_stages {NONE, SCAN_START, SCAN_COMPLETE, SSID_ENTERED, WAIT_PASS, PASS_ENTERED, WAIT_CONNECT, LOGIN_FAILED};
 enum wifi_setup_stages wifi_stage = NONE;
 
 // PINS
 int pin_Sensor_copo_repositorio = 1;  //(INSERIR PINO de conexão com o sensor de infravermelho do repositorio);
-int pin_Sensor_copo_bandeja = 13;  //(INSERIR PINO de conexão com o sensor de infravermelho da bandeja);
-int pin_Servo_mangueira = 12;    //(INSERIR PINO de conexão com o servo mangueira);
+int pin_Sensor_copo_bandeja = 15;  //(INSERIR PINO de conexão com o sensor de infravermelho da bandeja);
+int pin_Servo_mangueira = 13;    //(INSERIR PINO de conexão com o servo mangueira);
 int pin_Motor_copo = 1;    //(INSERIR PINO de conexão com o drive do motor que solta um copo);
-int pin_Motor_copo_gnd = 16;    //(INSERIR PINO de conexão com o drive do motor que solta um copo gnd);
-int pin_Motor_liquido = 14;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido);
-int pin_Motor_liquido_gnd = 15;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido gnd);
+int pin_Motor_copo_gnd = 12;    //(INSERIR PINO de conexão com o drive do motor que solta um copo gnd);
+int pin_Motor_liquido = 22;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido);
+int pin_Motor_liquido_gnd = 23;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido gnd);
 
 //callback para receber os eventos de conexão de dispositivos
 class ServerCallbacks: public BLEServerCallbacks {
@@ -63,6 +72,38 @@ class ServerCallbacks: public BLEServerCallbacks {
     }
 };
 
+void wifi_task(){
+  String ssid;
+  String password;
+  
+  ssid = read_string_rom(ssid_Addr);
+  password = read_string_rom(pass_Addr);
+  Serial.println(ssid);
+  Serial.println(password);
+  
+  if(ssid.length() > 0 && password.length() > 0){
+    Serial.print("SSID: ");
+    Serial.println(ssid);
+    Serial.print("password: ");
+    Serial.println(password);
+    WiFi.begin(ssid.c_str(), password.c_str());
+    Serial.print(" Conectando Wifi ");
+    while(WiFi.status() != WL_CONNECTED){
+      Serial.print(".");
+      delay(300);
+    }
+    Serial.print("Conectado com o IP: ");
+    Serial.println(WiFi.localIP());
+    Serial.println();
+    // WEB SErver
+    web_server.begin();
+  }
+  else{
+    Serial.println("There is nothing");
+  }
+  
+  
+}
 class CharacteristicCallbacks: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *characteristic) {
       //retorna ponteiro para o registrador contendo o valor atual da caracteristica
@@ -85,14 +126,20 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
            Serial.print("Configuração");
            wifi_stage = SCAN_START;
         }
+        if (rxValue.find("wifi") != -1) { 
+           Serial.print("Wifi Task");
+           wifi_task();
+        }
         if( wifi_stage == SCAN_COMPLETE) {
           client_wifi_ssid = rxValue.data();
           Serial.println(client_wifi_ssid);
+          write_string_rom(ssid_Addr,client_wifi_ssid);
           wifi_stage = SSID_ENTERED;
         }
         if (wifi_stage == WAIT_PASS){
           client_wifi_password = rxValue.data();
           Serial.println(rxValue.data());
+          write_string_rom(pass_Addr,client_wifi_password);
           wifi_stage = PASS_ENTERED;
         }
       }
@@ -149,10 +196,20 @@ void setup() {
   // Iniciar serviço BLE
   service->start();
   server->getAdvertising()->start();
+
+  // EEPROM
+  if (!EEPROM.begin(EEPROM_SIZE))
+  {
+    Serial.println("failed to initialise EEPROM"); delay(1000000);
+  }
+
+  
 }
 
 // LOOP
 void loop() {
+   
+   //Serial.println(client_wifi_password);
    if(flag_dispositivo_conectado){
      if(wifi_stage == SCAN_START){
           Serial.println("Escaneando wifis");
@@ -207,6 +264,12 @@ void loop() {
             }
         }
      }  
+     else{
+     web_server_loop();
+     }
+   }
+   else{
+     web_server_loop();
    }
 }
 
@@ -332,4 +395,95 @@ void Bombear_liquido(){
     }
     //digitalWrite(pin_Motor_liquido, LOW);
     Serial.println("Bombeamento Finalizado");
+}
+
+
+
+void write_string_rom(int add, String data){
+  int _size = data.length();
+  int i;
+  
+  for(i=0 ; i<_size; i++){
+    EEPROM.write(add+i,data[i]);
+  }
+  EEPROM.write(add+_size,'\0');
+  EEPROM.commit();
+}
+
+String read_string_rom(int add){
+  char data[100];
+  int len =0;
+  unsigned char k;
+  k = EEPROM.read(add);
+  while( k != '\0'){
+    k = EEPROM.read(add+len);
+    data[len] = k;
+    len++;
+  }
+  data[len] = '\0';
+  Serial.println(String(data));
+  return String(data);
+}
+
+void web_server_loop(){
+  // Current time
+  long currentTime = millis();
+  // Previous time
+  unsigned long previousTime = 0; 
+  // Define timeout time in milliseconds (example: 2000ms = 2s)
+  const long timeoutTime = 2000;
+  WiFiClient client = web_server.available();   // Listen for incoming clients
+  if (client) {                             // If a new client connects,
+    currentTime = millis();
+    previousTime = currentTime;
+    Serial.println("New Client.");          // print a message out in the serial port
+    String currentLine = "";                // make a String to hold incoming data from the client
+    while (client.connected() && currentTime - previousTime <= timeoutTime) {  // loop while the client's connected
+      currentTime = millis();
+      if (client.available()) {             // if there's bytes to read from the client,
+        char c = client.read();             // read a byte, then
+        Serial.write(c);                    // print it out the serial monitor
+        header += c;
+        if (c == '\n') {                    // if the byte is a newline character
+          // if the current line is blank, you got two newline characters in a row.
+          // that's the end of the client HTTP request, so send a response:
+          if (currentLine.length() == 0) {
+            // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
+            // and a content-type so the client knows what's coming, then a blank line:
+            client.println("HTTP/1.1 200 OK");
+            client.println("Content-type:text/html");
+            client.println("Connection: close");
+            client.println();
+            
+            // turns the GPIOs on and off
+            if (header.indexOf("GET /on") >= 0) {
+              Serial.println("GPIO 26 on");
+              Serial.print("Liberando copo");
+              if (!flag_comando_inicio) {
+                flag_comando_inicio = 1;
+                Serial.println("flag comando = 1");
+              } else {
+                Serial.println("flag comando reinicio = 1");
+                flag_comando_reinicio = 1;
+              }
+            } else if (header.indexOf("GET /26/off") >= 0) {
+              Serial.println("GPIO 26 off");
+              digitalWrite(26, LOW);
+            }
+          break;
+          } else { // if you got a newline, then clear currentLine
+            currentLine = "";
+          }
+        } else if (c != '\r') {  // if you got anything else but a carriage return character,
+          currentLine += c;      // add it to the end of the currentLine
+        }
+      }
+    }
+    // Clear the header variable
+    header = "";
+    // Close the connection
+    client.stop();
+    Serial.println("Client disconnected.");
+    Serial.println("");
+  }
 }
