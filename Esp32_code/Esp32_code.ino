@@ -13,22 +13,27 @@
 #include <WiFiServer.h>
 #include "EEPROM.h"
 
+
 // Constantes
 #define SERVICE_UUID           "ab0828b1-198e-4351-b779-901fa0e0371e" // UART service UUID
 #define CHARACTERISTIC_UUID_RX "4ac8a682-9736-4e5d-932b-e9b31405049c"
 #define CHARACTERISTIC_UUID_TX "0972EF8C-7613-4075-AD52-756F33D4DA91"
 #define EEPROM_SIZE 128
+
 // Parâmetros ajustáveis 
 #define TEMPO_POSICIONAR_MANGUEIRA 2000
 #define TEMPO_BOMBEAMENTO 10000
 #define TEMPO_ESPERAR_COPO 5000
 #define TEMPO_LIBERAR_COPO 1000
 
+
+
 // Variáveis
 Servo servo_Mangueira;   // Objeto do servo que controla a mangueira
 BLECharacteristic *characteristicTX; // Objeto que permite enviar dados para o cliente Bluetooth
 BluetoothSerial SerialBT;
 WiFiServer web_server(80);    // Set web server port number to 80
+
 
 bool flag_dispositivo_conectado = false; // Indica que um dispositivo bluetooth foi conectado
 bool flag_comando_inicio = 0;  // Indica que o comando Bluetooth foi recebido e agora está no meio do processo.
@@ -49,17 +54,19 @@ String header;
 const int ssid_Addr = 0;     // Endereços da memória rom para ssid e senha da wifi.
 const int pass_Addr = 30;
 
+
 enum wifi_setup_stages {NONE, SCAN_START, SCAN_COMPLETE, SSID_ENTERED, WAIT_PASS, PASS_ENTERED, WAIT_CONNECT, LOGIN_FAILED};
 enum wifi_setup_stages wifi_stage = NONE;
 
 // PINS
-int pin_Sensor_copo_repositorio = 1;  //(INSERIR PINO de conexão com o sensor de infravermelho do repositorio);
-int pin_Sensor_copo_bandeja = 15;  //(INSERIR PINO de conexão com o sensor de infravermelho da bandeja);
-int pin_Servo_mangueira = 13;    //(INSERIR PINO de conexão com o servo mangueira);
-int pin_Motor_copo = 1;    //(INSERIR PINO de conexão com o drive do motor que solta um copo);
-int pin_Motor_copo_gnd = 12;    //(INSERIR PINO de conexão com o drive do motor que solta um copo gnd);
-int pin_Motor_liquido = 22;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido);
-int pin_Motor_liquido_gnd = 23;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido gnd);
+int pin_Sensor_copo_repositorio = 10;  //(INSERIR PINO de conexão com o sensor de infravermelho do repositorio);
+int pin_Sensor_copo_bandeja = 13;  //(INSERIR PINO de conexão com o sensor de infravermelho da bandeja);
+int pin_Servo_mangueira = 12;    //(INSERIR PINO de conexão com o servo mangueira);
+int pin_Motor_copo = 2;    //(INSERIR PINO de conexão com o drive do motor que solta um copo);
+int pin_Motor_copo_gnd = 16;    //(INSERIR PINO de conexão com o drive do motor que solta um copo gnd);
+int pin_Motor_liquido = 14;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido);
+int pin_Motor_liquido_gnd = 15;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido gnd);
+
 
 //callback para receber os eventos de conexão de dispositivos
 class ServerCallbacks: public BLEServerCallbacks {
@@ -134,6 +141,10 @@ class CharacteristicCallbacks: public BLECharacteristicCallbacks {
           client_wifi_ssid = rxValue.data();
           Serial.println(client_wifi_ssid);
           write_string_rom(ssid_Addr,client_wifi_ssid);
+        }
+        if( wifi_stage == SCAN_COMPLETE) {
+          client_wifi_ssid = rxValue.data();
+          Serial.println(client_wifi_ssid);
           wifi_stage = SSID_ENTERED;
         }
         if (wifi_stage == WAIT_PASS){
@@ -210,6 +221,7 @@ void setup() {
 void loop() {
    
    //Serial.println(client_wifi_password);
+   
    if(flag_dispositivo_conectado){
      if(wifi_stage == SCAN_START){
           Serial.println("Escaneando wifis");
@@ -402,7 +414,6 @@ void Bombear_liquido(){
 void write_string_rom(int add, String data){
   int _size = data.length();
   int i;
-  
   for(i=0 ; i<_size; i++){
     EEPROM.write(add+i,data[i]);
   }
