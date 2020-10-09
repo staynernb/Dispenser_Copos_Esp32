@@ -10,9 +10,14 @@
 #include <BLE2902.h>
 #include "BluetoothSerial.h"
 #include <WiFi.h>
-#include <WiFiServer.h>
+//#include <WiFiServer.h>
+#include <HTTPClient.h>
+#include "ArduinoJson.h"
 #include "EEPROM.h"
 
+HTTPClient http;
+char json[400] = "{\"ssid\":\"thots\",\"pass\":\"asd123\"}"; 
+StaticJsonDocument<200> doc;
 
 // Constantes
 #define SERVICE_UUID           "ab0828b1-198e-4351-b779-901fa0e0371e" // UART service UUID
@@ -22,17 +27,17 @@
 
 // Parâmetros ajustáveis 
 #define TEMPO_POSICIONAR_MANGUEIRA 2000
-#define TEMPO_BOMBEAMENTO 10000
+//#define TEMPO_BOMBEAMENTO 10000
 #define TEMPO_ESPERAR_COPO 5000
 #define TEMPO_LIBERAR_COPO 1000
 
-
+int TEMPO_BOMBEAMENTO = 8000;
 
 // Variáveis
 Servo servo_Mangueira;   // Objeto do servo que controla a mangueira
 BLECharacteristic *characteristicTX; // Objeto que permite enviar dados para o cliente Bluetooth
 BluetoothSerial SerialBT;
-WiFiServer web_server(80);    // Set web server port number to 80
+//WiFiServer web_server(80);    // Set web server port number to 80
 
 
 bool flag_dispositivo_conectado = false; // Indica que um dispositivo bluetooth foi conectado
@@ -44,6 +49,9 @@ int angulo_fim_mangueira = 90;     //posição do servo mangueira apontado para 
 int angulo_inicio_mangueira = 0;   //posição do servo mangueira inicial em graus
 
 unsigned long tempo_Bombeado = 0;
+int qtd_copos_repo = 0;
+int qtd_litros_repo = 0;
+int qtd_finalizados = 0;
 
 //String ssids_array[50];
 String client_wifi_ssid;
@@ -53,7 +61,6 @@ String header;
 
 const int ssid_Addr = 0;     // Endereços da memória rom para ssid e senha da wifi.
 const int pass_Addr = 30;
-
 
 enum wifi_setup_stages {NONE, SCAN_START, SCAN_COMPLETE, SSID_ENTERED, WAIT_PASS, PASS_ENTERED, WAIT_CONNECT, LOGIN_FAILED};
 enum wifi_setup_stages wifi_stage = NONE;
@@ -67,6 +74,8 @@ int pin_Motor_copo_gnd = 16;    //(INSERIR PINO de conexão com o drive do motor
 int pin_Motor_liquido = 14;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido);
 int pin_Motor_liquido_gnd = 15;    //(INSERIR PINO de conexão com o drive do motor bomba que despeja o líquido gnd);
 
+//Funções prototipos
+void checar_disparo();
 
 //callback para receber os eventos de conexão de dispositivos
 class ServerCallbacks: public BLEServerCallbacks {
@@ -103,7 +112,7 @@ void wifi_task(){
     Serial.println(WiFi.localIP());
     Serial.println();
     // WEB SErver
-    web_server.begin();
+    //web_server.begin();
   }
   else{
     Serial.println("There is nothing");
@@ -213,8 +222,9 @@ void setup() {
   {
     Serial.println("failed to initialise EEPROM"); delay(1000000);
   }
-
-  
+  wifi_task();
+  const size_t capacity = JSON_OBJECT_SIZE(1) + JSON_ARRAY_SIZE(8) + 146;
+  DynamicJsonDocument json(capacity);
 }
 
 // LOOP
@@ -236,52 +246,58 @@ void loop() {
           Serial.println("CONECTANDO");
           wifi_stage = NONE;
      }
-    
-     if (flag_comando_inicio == 1){
-        if (Verifica_copos_repositorio() == 0){
-            Serial.println("Sem COpos");
-            flag_comando_inicio = 0;
-        } 
-        else {
-            Liberar_copo_bandeja();
-            if (flag_cancelar_processo == 1){
-                Serial.println("Informar que houve problemas de liberação e copos");
-                flag_comando_inicio = 0;
-                flag_cancelar_processo = 0;
-            }
-            else {
-                Posicionar_mangueira_fim();
-                if (Verifica_copos_bandeja() != 1){
-                    Posicionar_mangueira_inicio();
-                    Aguardar_copo_ou_reinicio();
-                }
-  
-                if (flag_cancelar_processo == 1){
-                    Serial.println("Copo sumiu da bandeja");
-                    flag_comando_inicio = 0;
-                    flag_cancelar_processo = 0;
-                }
-                else if (flag_comando_reinicio == 1){
-                    Serial.println("Começar com novo copo");
-                    flag_comando_inicio = 1;
-                    flag_comando_reinicio = 0;
-                }
-                else {
-                    Posicionar_mangueira_fim();
-                    Bombear_liquido();
-                    Posicionar_mangueira_inicio();
-                    Serial.println("flag comando no final : ");
-                    Serial.print(flag_comando_inicio);
-                }
-            }
-        }
-     }  
-     else{
-     web_server_loop();
-     }
    }
    else{
-     web_server_loop();
+   }
+   if (flag_comando_inicio == 1){
+      if (Verifica_copos_repositorio() == 0){
+          Serial.println("Sem COpos");
+          flag_comando_inicio = 0;
+      } 
+      else {
+          Liberar_copo_bandeja();
+          if (flag_cancelar_processo == 1){
+              Serial.println("Informar que houve problemas de liberação e copos");
+              flag_comando_inicio = 0;
+              flag_cancelar_processo = 0;
+          }
+          else {
+              qtd_copos_repo = qtd_copos_repo - 1;
+              Posicionar_mangueira_fim();
+              if (Verifica_copos_bandeja() != 1){
+                  Posicionar_mangueira_inicio();
+                  Aguardar_copo_ou_reinicio();
+              }
+  
+              if (flag_cancelar_processo == 1){
+                  Serial.println("Copo sumiu da bandeja");
+                  flag_comando_inicio = 0;
+                  flag_cancelar_processo = 0;
+              }
+              else if (flag_comando_reinicio == 1){
+                  Serial.println("Começar com novo copo");
+                  flag_comando_inicio = 1;
+                  flag_comando_reinicio = 0;
+              }
+              else {
+                  Posicionar_mangueira_fim();
+                  Bombear_liquido();
+                  Posicionar_mangueira_inicio();
+                  qtd_finalizados += 1;
+                  Serial.println("flag comando no final : ");
+                  Serial.print(flag_comando_inicio);
+              }
+          }
+      }
+   }  
+   else{
+    if(WiFi.status() == WL_CONNECTED){
+      listen_server();
+      delay(200);
+    }
+    else{
+      wifi_task();
+    }
    }
 }
 
@@ -352,7 +368,6 @@ void Aguardar_copo_ou_reinicio(){
     }
 }
 
-
 void Bombear_liquido(){
     Serial.println("Bombeando liquido");
     unsigned long tempoAnterior = millis();
@@ -386,7 +401,6 @@ void Bombear_liquido(){
         }
         tempo_Bombeado = tempo_Bombeado + (millis() - tempoAnterior);
         tempoAnterior = millis();
-        Serial.println(tempo_Bombeado);
         if( tempo_Bombeado > TEMPO_BOMBEAMENTO){
            continuar = 0;
            Serial.print("continuar : ");
@@ -436,7 +450,135 @@ String read_string_rom(int add){
   return String(data);
 }
 
-void web_server_loop(){
+void result_get_disparo(String msg){
+    //memset(json,0,sizeof(json));
+    msg.toCharArray(json, 400);
+    Serial.println(msg);
+    deserializeJson(doc, json);
+    JsonObject ticker = doc["ticker"];
+      
+    long flag = doc["ativar"]; 
+    long tempo = doc["tempo"]; 
+
+    if(flag == 1){
+      flag_comando_inicio = 1;
+      TEMPO_BOMBEAMENTO = tempo*1000;
+    }
+    
+}
+
+void result_get_parametros(String msg){
+    //memset(json,0,sizeof(json));
+    msg.toCharArray(json, 400);
+    Serial.println(msg);
+    deserializeJson(doc, json);
+    JsonObject ticker = doc["ticker"];
+      
+    long qtd_copos = doc["qtd_copos"]; 
+    long litros = doc["litros"]; 
+    long repo = doc["repo"];
+
+    if(repo == 1){
+      qtd_copos_repo = qtd_copos;
+      qtd_litros_repo = litros;
+    }
+      
+}
+void result_get_wifi(String msg){
+    //memset(json,0,sizeof(json));
+    msg.toCharArray(json, 400);
+    Serial.println(msg);
+    deserializeJson(doc, json);
+    JsonObject ticker = doc["ticker"];
+      
+    const char* ssid = doc["ssid"]; 
+    const char* pass = doc["pass"]; 
+    long wifi_change = doc["wifi_change"];
+
+    String ssid_wifi = ssid;
+    String pass_wifi = pass;
+    
+    int i = 0;
+    Serial.println(ssid_wifi.c_str());
+    if(wifi_change == 1){
+      //WiFi.disconnect(true);
+      WiFi.begin(ssid_wifi.c_str(), pass_wifi.c_str());
+      
+      while(WiFi.status() != WL_CONNECTED){
+        Serial.print(".");
+        delay(300);
+        i++;
+        if(i >= 8)
+          //WiFi.disconnect(true);
+          wifi_task();
+          break;
+      }
+      if( i< 8){
+        write_string_rom(ssid_Addr,ssid_wifi);
+        write_string_rom(pass_Addr,pass_wifi);
+      }
+    }
+}
+
+void post_data_server(){
+ 
+  Serial.println("Posting JSON data to server...");
+  // Your Domain name with URL path or IP address with path
+  http.begin("https://thoths.cc/api.php?acao=cadastrar_esp");
+  // Specify content-type header
+  http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+  
+  String httpRequestData = "mac=123&qtd_copos="+String(qtd_copos_repo)+"&qtd_litros="+String(qtd_litros_repo)+"&qtd_finalizados="+String(qtd_finalizados);
+  Serial.println(httpRequestData);
+  // Send HTTP POST request 
+  int httpResponseCode = http.POST(httpRequestData);
+    
+  Serial.println(httpResponseCode);
+  String payload = http.getString();
+  //Serial.println(httpCode);
+  Serial.println(payload);
+     
+  http.end();
+}
+
+void listen_server(){
+  //3 - iniciamos a URL alvo, pega a resposta e finaliza a conexão
+    http.begin("https://thoths.cc/api.php?acao=checar_disparo");
+    int httpCode = http.GET();
+    if (httpCode > 0) { //Maior que 0, tem resposta a ser lida
+        String payload = http.getString();
+        result_get_disparo(payload);
+    }
+    else {
+        Serial.println("Falha na requisição");
+    }
+    http.end();
+    
+    http.begin("https://thoths.cc/api.php?acao=obter_wifi");
+    int httpCode1 = http.GET();
+    if (httpCode1 > 0) { //Maior que 0, tem resposta a ser lida
+        String payload2 = http.getString();
+        result_get_wifi(payload2); 
+    }
+    else {
+        Serial.println("Falha na requisição");
+    }
+    http.end();
+
+    http.begin("https://thoths.cc/api.php?acao=obter_paramentros");
+    int httpCode2 = http.GET();
+    if (httpCode2 > 0) { //Maior que 0, tem resposta a ser lida
+        String payload3 = http.getString();
+        result_get_parametros(payload3); 
+    }
+    else {
+        Serial.println("Falha na requisição");
+    }
+    http.end();
+
+    post_data_server();
+}
+/*void web_server_loop(){
   // Current time
   long currentTime = millis();
   // Previous time
@@ -497,4 +639,4 @@ void web_server_loop(){
     Serial.println("Client disconnected.");
     Serial.println("");
   }
-}
+}*/
